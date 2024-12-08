@@ -8,13 +8,15 @@ import math
 # Device configuration
 DEVICE_IP = "169.254.22.238"
 DEVICE_PORT = 33333
-HEARTBEAT_MESSAGE = b"99999"
-HEARTBEAT_RESPONSE = b"99998"
+HEARTBEAT_MESSAGE = b"\x39\x39\x39\x39\x39"  # "99999" in ASCII hex
+HEARTBEAT_RESPONSE = b"\x39\x39\x39\x39\x38"  # "99998" in ASCII hex
 HEARTBEAT_INTERVAL = 5  # seconds
+TIMEOUT_INTERVAL = 10  # seconds
 
 # Global variables
 connected = False
 running = True
+last_heartbeat_time = 0
 
 
 def validate_hex_input(entry, max_length):
@@ -111,7 +113,6 @@ def send_message():
         messagebox.showerror("Error", f"Failed to send message: {e}")
 
 
-
 def log(message):
     log_area.config(state="normal")
     log_area.insert(tk.END, message + "\n")
@@ -128,27 +129,30 @@ def update_status(is_connected):
     connected = is_connected
 
 
-def check_connection():
-    global connected
+def heartbeat_monitor():
+    global connected, last_heartbeat_time
     while running:
         try:
             sock.sendto(HEARTBEAT_MESSAGE, (DEVICE_IP, DEVICE_PORT))
+            # log("Heartbeat sent.")
             time.sleep(HEARTBEAT_INTERVAL)
-            if not connected:
+            current_time = time.time()
+            if current_time - last_heartbeat_time > TIMEOUT_INTERVAL:
                 update_status(False)
         except Exception as e:
-            log(f"Error checking connection: {e}")
+            log(f"Error in heartbeat: {e}")
             update_status(False)
 
 
 def listen_for_messages():
-    global connected
+    global last_heartbeat_time
     while running:
         try:
             data, _ = sock.recvfrom(1024)
             if data == HEARTBEAT_RESPONSE:
-                connected = True
+                last_heartbeat_time = time.time()
                 update_status(True)
+                # log("Heartbeat acknowledged.")
             elif len(data) >= 11:
                 can_id = int.from_bytes(data[0:2], "little")
                 can_length = data[2]
@@ -206,7 +210,7 @@ log_area = scrolledtext.ScrolledText(log_frame, width=60, height=20, wrap=tk.WOR
 log_area.pack(fill="both", expand=True)
 
 # Start threads for connection check and listener
-threading.Thread(target=check_connection, daemon=True).start()
+threading.Thread(target=heartbeat_monitor, daemon=True).start()
 threading.Thread(target=listen_for_messages, daemon=True).start()
 
 
