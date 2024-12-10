@@ -17,7 +17,9 @@ TIMEOUT_INTERVAL = 10  # seconds
 connected = False
 running = True
 last_heartbeat_time = 0
-
+hide_duplicate_messages = True  # Flag to hide duplicate messages
+last_sent_message = None
+last_received_message = None
 
 def validate_hex_input(entry, max_length):
     """Ensure the entry contains only valid hex characters and is within the max length."""
@@ -30,7 +32,6 @@ def validate_hex_input(entry, max_length):
     # If this is the Data field, update the byte count
     if entry == data_entry:
         update_byte_count()
-
 
 def update_byte_count():
     """Update byte count, validate data input, and calculate length."""
@@ -56,9 +57,8 @@ def update_byte_count():
     length_entry.insert(0, str(byte_count))
     length_entry.config(state="readonly")
 
-
 def send_message():
-    global connected
+    global connected, last_sent_message
 
     # Check if connected
     if not connected:
@@ -108,17 +108,16 @@ def send_message():
     try:
         message = can_id.to_bytes(2, "little") + can_length.to_bytes(1, "little") + can_data
         sock.sendto(message, (DEVICE_IP, DEVICE_PORT))
+        last_sent_message = message
         log(f"Sent: ID=0x{can_id:04X}, Length={can_length}, Data={can_data.hex()}")
     except Exception as e:
         messagebox.showerror("Error", f"Failed to send message: {e}")
-
 
 def log(message):
     log_area.config(state="normal")
     log_area.insert(tk.END, message + "\n")
     log_area.yview(tk.END)
     log_area.config(state="disabled")
-
 
 def update_status(is_connected):
     global connected
@@ -127,7 +126,6 @@ def update_status(is_connected):
     else:
         status_label.config(text="Status: Disconnected", fg="red")
     connected = is_connected
-
 
 def heartbeat_monitor():
     global connected, last_heartbeat_time
@@ -143,9 +141,8 @@ def heartbeat_monitor():
             log(f"Error in heartbeat: {e}")
             update_status(False)
 
-
 def listen_for_messages():
-    global last_heartbeat_time
+    global last_heartbeat_time, last_received_message
     while running:
         try:
             data, _ = sock.recvfrom(1024)
@@ -154,6 +151,10 @@ def listen_for_messages():
                 update_status(True)
                 # log("Heartbeat acknowledged.")
             elif len(data) >= 11:
+                if hide_duplicate_messages and data == last_sent_message:
+                    continue  # Skip logging if the message is a duplicate
+
+                last_received_message = data
                 can_id = int.from_bytes(data[0:2], "little")
                 can_length = data[2]
                 can_data = data[3:11]
@@ -162,7 +163,6 @@ def listen_for_messages():
             pass
         except Exception as e:
             log(f"Error receiving data: {e}")
-
 
 # Create the socket
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -180,7 +180,7 @@ status_label.pack(pady=5)
 transmit_frame = tk.LabelFrame(root, text="Transmit CAN Message", padx=10, pady=10)
 transmit_frame.pack(fill="x", padx=10, pady=5)
 
-tk.Label(transmit_frame, text="ID (hex, 2 bytes):").grid(row=0, column=0, padx=5, pady=5)
+tk.Label(transmit_frame, text="ID (hex, 1 byte):").grid(row=0, column=0, padx=5, pady=5)
 id_entry = tk.Entry(transmit_frame, width=10)
 id_entry.grid(row=0, column=1, padx=5, pady=5)
 id_entry.bind("<KeyRelease>", lambda event: validate_hex_input(id_entry, 4))
@@ -213,14 +213,12 @@ log_area.pack(fill="both", expand=True)
 threading.Thread(target=heartbeat_monitor, daemon=True).start()
 threading.Thread(target=listen_for_messages, daemon=True).start()
 
-
 # Run the application
 def on_close():
     global running
     running = False
     sock.close()
     root.destroy()
-
 
 root.protocol("WM_DELETE_WINDOW", on_close)
 root.mainloop()
